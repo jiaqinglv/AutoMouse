@@ -1,7 +1,22 @@
 fn main() {
+    check_wifi_credentials();
     linker_be_nice();
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");
+}
+
+/// `src/wifi_credentials.rs` is git-ignored, so a fresh clone won't have it.
+/// `include!` would then fail with a bare "couldn't read file" error, so give
+/// the user something actionable instead.
+fn check_wifi_credentials() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/wifi_credentials.rs");
+    if !path.exists() {
+        panic!(
+            "\n\n💡 `src/wifi_credentials.rs` not found.\n\
+             Copy the template and fill in your Wi-Fi credentials:\n\n\
+             cp src/wifi_credentials.rs.example src/wifi_credentials.rs\n\n"
+        );
+    }
 }
 
 fn linker_be_nice() {

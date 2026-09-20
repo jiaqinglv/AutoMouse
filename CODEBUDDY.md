@@ -72,7 +72,7 @@ The MQTT payload wire format (see `src/mqtt.rs`) is 13 bytes, little-endian:
 
 ### Configuration that is hardcoded (not env-driven)
 
-- `WIFI_SSID` / `WIFI_PASSWORD` — `src/wifi.rs`.
+- `WIFI_SSID` / `WIFI_PASSWORD` — `src/wifi_credentials.rs`, which is **git-ignored**. `src/wifi.rs` pulls it in with `include!`, so the values are baked in at compile time (no runtime file read, no parsing). `src/wifi_credentials.rs.example` is the checked-in template; `build.rs` fails early with a reminder if the real file is missing.
 - `MQTT_BROKER` (IPv4 string) / `MQTT_PORT` / `MQTT_CLIENT_ID` / `MQTT_TOPIC` — `src/mqtt.rs`.
 - USB VID/PID/strings — `src/hid/mod.rs`.
 - Heap sizes — `src/bin/main.rs` (`73744` + `64 * 1024` bytes).

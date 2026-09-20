@@ -2,6 +2,9 @@
 debug/
 target/
 
+# Real Wi-Fi credentials - never commit these
+src/wifi_credentials.rs
+
 # Editor configuration
 .vscode/
 .zed/

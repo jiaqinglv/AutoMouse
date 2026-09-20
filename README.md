@@ -31,23 +31,38 @@ It exposes the board as a USB mouse and drives the cursor from two independent i
 
 ## Configuration
 
-All configuration is compile-time and lives in the source tree. Nothing is read from the environment, so these values must be edited before flashing:
+Configuration is compile-time and source-tree based. Nothing is read from the environment at build time or at runtime.
+
+Wi-Fi credentials are kept out of the repository in a git-ignored file, so create it before the first build:
+
+```sh
+cp src/wifi_credentials.rs.example src/wifi_credentials.rs
+```
+
+Then fill in your own values:
+
+```rust
+const WIFI_SSID: &str = "your-ssid";
+const WIFI_PASSWORD: &str = "your-password";
+```
+
+`src/wifi.rs` pulls the file in with `include!`, so the credentials are baked into the binary at compile time — there is no runtime file read and no parsing step. Because the file is git-ignored, a fresh clone will not build until you create it; `build.rs` fails early with a reminder when it is missing.
+
+The remaining settings are checked in and edited directly:
 
 | Setting | Location |
 |---------|----------|
-| `WIFI_SSID`, `WIFI_PASSWORD` | `src/wifi.rs` |
 | `MQTT_BROKER`, `MQTT_PORT`, `MQTT_CLIENT_ID`, `MQTT_TOPIC` | `src/mqtt.rs` |
 | USB VID/PID and descriptor strings | `src/hid/mod.rs` |
 | Heap allocator sizes | `src/bin/main.rs` |
 
 Notes:
 
-- The Wi-Fi and MQTT constants ship as placeholders and must be replaced with real values — the firmware cannot connect until you do.
 - `MQTT_BROKER` is parsed as an IPv4 address, not a hostname.
 - The MQTT client connects over plain TCP: no TLS, no authentication.
 - `MQTT_CLIENT_ID` is fixed, so two boards pointed at the same broker will contend for the same session.
 
-Do not commit real credentials. If these values need to be shared across machines, read them from a build-time environment variable via `option_env!` instead of hardcoding them.
+Never commit `src/wifi_credentials.rs`. A leaked value stays in git history until the history itself is rewritten, so rotating the credential on the router is the only reliable fix.
 
 ## Build
 
@@ -137,6 +152,7 @@ src/
 ├── bin/main.rs    # Application entry point, peripheral init, and task spawning
 ├── hid/mod.rs     # USB HID mouse setup, MOUSE_CHANNEL, and button constants
 ├── wifi.rs        # Wi-Fi scan/connect and DHCP, then spawns the MQTT task
+├── wifi_credentials.rs.example  # Template for the git-ignored credentials file
 ├── mqtt.rs        # MQTT v5 client subscribed to the mouse topic
 └── lib.rs         # Module re-exports and the mk_static! helper
 ```

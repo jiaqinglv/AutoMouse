@@ -31,23 +31,38 @@ AutoMouse 是一个用 Rust 编写的、面向 ESP32-S3 的极简 `#![no_std]` U
 
 ## 配置
 
-所有配置都是编译期的，写死在源码里，不从环境变量读取。烧录前必须修改以下内容：
+配置都是编译期的，位于源码树内。构建期和运行期都不会读取环境变量。
+
+Wi-Fi 凭据被放在一个 git 忽略的文件里，不进仓库，因此首次构建前需要先创建它：
+
+```sh
+cp src/wifi_credentials.rs.example src/wifi_credentials.rs
+```
+
+然后填入你自己的值：
+
+```rust
+const WIFI_SSID: &str = "your-ssid";
+const WIFI_PASSWORD: &str = "your-password";
+```
+
+`src/wifi.rs` 通过 `include!` 引入该文件，因此凭据在编译期就被写入二进制——运行期不会读取文件，也没有解析步骤。由于该文件被 git 忽略，新克隆的仓库在创建它之前无法构建；文件缺失时 `build.rs` 会提前失败并给出提示。
+
+其余配置项随仓库提交，直接修改即可：
 
 | 配置项 | 位置 |
 |--------|------|
-| `WIFI_SSID`、`WIFI_PASSWORD` | `src/wifi.rs` |
 | `MQTT_BROKER`、`MQTT_PORT`、`MQTT_CLIENT_ID`、`MQTT_TOPIC` | `src/mqtt.rs` |
 | USB VID/PID 及描述符字符串 | `src/hid/mod.rs` |
 | 堆分配器大小 | `src/bin/main.rs` |
 
 注意：
 
-- Wi-Fi 和 MQTT 相关常量目前是占位符，必须替换为真实值，否则固件无法联网。
 - `MQTT_BROKER` 按 IPv4 地址解析，不是主机名。
 - MQTT 客户端走明文 TCP：没有 TLS，也没有鉴权。
 - `MQTT_CLIENT_ID` 是固定的，因此两块板子连同一个 broker 会争抢同一个会话。
 
-不要把真实凭据提交进仓库。如果这些值需要在多台机器间共享，应改为通过 `option_env!` 从构建期环境变量读取，而不是硬编码。
+绝不要提交 `src/wifi_credentials.rs`。一旦泄露，该值会一直留在 git 历史里，除非重写整个历史，因此唯一可靠的补救方式是在路由器上更换凭据。
 
 ## 构建
 
@@ -137,6 +152,7 @@ src/
 ├── bin/main.rs    # 应用入口，外设初始化和任务派生
 ├── hid/mod.rs     # USB HID 鼠标初始化、MOUSE_CHANNEL 和按钮常量
 ├── wifi.rs        # Wi-Fi 扫描/连接与 DHCP，之后派生 MQTT 任务
+├── wifi_credentials.rs.example  # git 忽略的凭据文件模板
 ├── mqtt.rs        # 订阅鼠标主题的 MQTT v5 客户端
 └── lib.rs         # 模块重新导出和 mk_static! 辅助宏
 ```

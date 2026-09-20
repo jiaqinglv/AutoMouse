@@ -4,8 +4,10 @@ use esp_radio::wifi::{Ssid, scan::ScanConfig, sta::StationConfig};
 use log::{error, info};
 extern crate alloc;
 
-const WIFI_SSID: &str = "x";
-const WIFI_PASSWORD: &str = "x";
+// Wi-Fi credentials live in `src/wifi_credentials.rs`, which is git-ignored.
+// `include!` bakes them into the binary at compile time.
+// Copy `src/wifi_credentials.rs.example` there and fill in your own values.
+include!("wifi_credentials.rs");
 
 // Network task - runs the embassy-net runner
 #[embassy_executor::task]

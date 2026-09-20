@@ -1,12 +1,16 @@
 # AutoMouse
 
-AutoMouse 是一个用 Rust 编写的、面向 ESP32-S3 的极简 USB HID 鼠标固件。
+AutoMouse 是一个用 Rust 编写的、面向 ESP32-S3 的极简 `#![no_std]` USB HID 鼠标固件。
+
+它把开发板枚举为一个 USB 鼠标，并由两个相互独立的输入源驱动光标：物理 GPIO 按钮，以及通过 Wi-Fi 收到的 MQTT 消息。两者都汇入同一个共享通道，由 HID 写入任务消费。
 
 ## 功能
 
 - 基于 `embassy-usb` 和 `usbd-hid` 的 USB HID 鼠标设备
 - 通过 GPIO 输入实现左键和右键点击
 - 按住按钮时产生光标拖拽效果
+- 通过 Wi-Fi 远程控制：订阅一个 MQTT 主题，并把收到的鼠标报告注入 HID
+- `TIMG1` 看门狗，固件卡死时复位芯片
 - 报告描述符和 `MouseReport` 类型与 RMK 键盘固件的鼠标实现兼容
 
 ## 硬件要求
@@ -14,6 +18,7 @@ AutoMouse 是一个用 Rust 编写的、面向 ESP32-S3 的极简 USB HID 鼠标
 - ESP32-S3 开发板
 - 连接到板载 USB 引脚的 USB 线（GPIO20 D+ / GPIO19 D-）
 - 两个瞬时按钮（可选；使用内部下拉）
+- 一个可连接的 Wi-Fi 热点，以及同一网络内可达的 MQTT broker
 
 ## 引脚定义
 
@@ -24,13 +29,37 @@ AutoMouse 是一个用 Rust 编写的、面向 ESP32-S3 的极简 USB HID 鼠标
 | GPIO19| USB D-         | USB OTG 固定功能引脚 |
 | GPIO20| USB D+         | USB OTG 固定功能引脚 |
 
+## 配置
+
+所有配置都是编译期的，写死在源码里，不从环境变量读取。烧录前必须修改以下内容：
+
+| 配置项 | 位置 |
+|--------|------|
+| `WIFI_SSID`、`WIFI_PASSWORD` | `src/wifi.rs` |
+| `MQTT_BROKER`、`MQTT_PORT`、`MQTT_CLIENT_ID`、`MQTT_TOPIC` | `src/mqtt.rs` |
+| USB VID/PID 及描述符字符串 | `src/hid/mod.rs` |
+| 堆分配器大小 | `src/bin/main.rs` |
+
+注意：
+
+- Wi-Fi 和 MQTT 相关常量目前是占位符，必须替换为真实值，否则固件无法联网。
+- `MQTT_BROKER` 按 IPv4 地址解析，不是主机名。
+- MQTT 客户端走明文 TCP：没有 TLS，也没有鉴权。
+- `MQTT_CLIENT_ID` 是固定的，因此两块板子连同一个 broker 会争抢同一个会话。
+
+不要把真实凭据提交进仓库。如果这些值需要在多台机器间共享，应改为通过 `option_env!` 从构建期环境变量读取，而不是硬编码。
+
 ## 构建
 
-本项目目标平台为 `xtensa-esp32s3-none-elf`，使用 `esp` Rust 工具链。
+本项目目标平台为 `xtensa-esp32s3-none-elf`，需要 `esp` Rust 工具链（不是 stable）。`rust-toolchain.toml` 固定了工具链通道，`.cargo/config.toml` 指定了目标平台并启用了 `build-std = ["alloc", "core"]`。
 
 ```sh
-cargo build
+cargo build          # dev 配置
+cargo build --release
+cargo clippy
 ```
+
+两种配置都使用 `opt-level = "s"`；二进制体积会影响分区布局，因此不要随意改动。
 
 ## 烧录
 
@@ -40,7 +69,7 @@ cargo build
 cargo run
 ```
 
-该命令会构建固件、烧录到开发板，并打开串口监视器。
+该命令会构建固件、烧录到开发板，并打开串口监视器。日志级别由 `.cargo/config.toml` 中的 `ESP_LOG=info` 控制。
 
 ## 运行行为
 
@@ -51,24 +80,77 @@ cargo run
 - 按下 GPIO4：右键按下
 - 释放 GPIO4：右键释放
 - 按住任意按钮：每 10 毫秒发送一次轻微拖拽报告（x=2, y=2）
+- 释放：发送一次无按键、位移为零的报告，用于停止拖拽
 
 HID 鼠标报告中的 `x` 和 `y` 是**相对增量（delta）**，不是绝对坐标。主机会维护光标位置，并把每次收到的增量累加到当前位置上。例如，`x=2` 表示光标向右移动 2 个像素，`x=-3` 表示向左移动 3 个像素。
+
+## MQTT 协议
+
+连接 Wi-Fi 并获取到 DHCP 租约后，固件会订阅所配置的主题，并把该主题上的每条消息都当作一次鼠标报告。载荷为 13 字节，小端序：
+
+| 偏移 | 类型 | 字段 |
+|------|------|------|
+| 0..8 | `u64` 小端 | `msg_id` —— 关联用 ID，固件不做解释 |
+| 8 | `u8` | `buttons` 位掩码 |
+| 9 | `i8` | `x` 增量 |
+| 10 | `i8` | `y` 增量 |
+| 11 | `i8` | `wheel` —— 正数向上滚动 |
+| 12 | `i8` | `pan` —— 正数向右滚动 |
+
+`buttons` 位掩码定义如下：
+
+| 位 | 值 | 按键 |
+|----|-----|------|
+| 0 | `0x01` | 左键 |
+| 1 | `0x02` | 右键 |
+| 2 | `0x04` | 中键 |
+
+任何连接或订阅失败都会在 10 秒延迟后重试。
+
+## 架构
+
+所有输入源都把 `MouseReport` 送入同一个通道，而不是直接操作 HID 写入器：
+
+```text
+GPIO 按钮 ─┐
+           ├─► hid::MOUSE_CHANNEL ─► mouse_task ─► HidWriter ─► USB
+MQTT 消息 ─┘
+```
+
+`hid::MOUSE_CHANNEL`（`src/hid/mod.rs`）是集成点。USB HID 写入器只由 `mouse_task` 独占；新增输入源时必须向该通道发送，而不是绕过它。
+
+由 `main` 派生的 Embassy 任务：
+
+| 任务 | 职责 |
+|------|------|
+| `watchdog_task` | 每 500 毫秒喂一次 `TIMG1` 看门狗（超时 1 秒，超时后复位芯片） |
+| `usb_task` | 在整个程序生命周期内驱动 `embassy-usb` 设备栈 |
+| `mouse_task` | `MOUSE_CHANNEL` 的唯一消费者，把报告写入 HID 端点 |
+| `button_task` | 每 10 毫秒轮询 GPIO2/GPIO4；状态变化时发报告，按住时持续发拖拽报告 |
+| `wifi::net_task` | 运行 `embassy-net` runner，网络栈才能推进 |
+| `wifi::wifi_task` | 扫描、连接、等待 DHCP，然后派生 `mqtt::mqtt_task` |
 
 ## 项目结构
 
 ```text
 src/
-├── bin/main.rs    # 应用入口，USB/GPIO 初始化和任务
-├── hid/mod.rs     # USB HID 鼠标初始化和按钮常量
-└── lib.rs         # 共享的 mk_static! 辅助宏
+├── bin/main.rs    # 应用入口，外设初始化和任务派生
+├── hid/mod.rs     # USB HID 鼠标初始化、MOUSE_CHANNEL 和按钮常量
+├── wifi.rs        # Wi-Fi 扫描/连接与 DHCP，之后派生 MQTT 任务
+├── mqtt.rs        # 订阅鼠标主题的 MQTT v5 客户端
+└── lib.rs         # 模块重新导出和 mk_static! 辅助宏
 ```
 
 ## 依赖
 
-- `esp-hal` 1.x，启用 `esp32s3` 特性
-- `embassy-usb` 0.6
-- `usbd-hid` 0.10
+- `esp-hal` 1.1，启用 `esp32s3`、`log-04`、`unstable` 特性
 - `esp-rtos` 0.3，启用 Embassy 集成
+- `esp-radio` 0.18（Wi-Fi + BLE 共存）
+- `embassy-usb` 0.6 和 `usbd-hid` 0.10
+- `embassy-net` 0.9（DHCP/TCP），底层为 `smoltcp` 0.13
+- `rust-mqtt` 0.5（MQTT v5，启用 `bump` 特性）
+
+`bleps` 固定到了某个 git 版本，但 BLE 目前在 `main.rs` 中处于注释状态。
 
 ## 许可证
 
